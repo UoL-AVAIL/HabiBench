@@ -17,14 +17,10 @@ image="vllm-openai-v0.32.0-${oci_sha}.sqfs"
 if [[ -f "$image" && -f "$image.sha256" ]]; then
     sha256sum --check "$image.sha256"
 else
-    # Older Enroot installations also accept the sha256 digest in the legacy tag position.
-    # Prefer standard Docker digest syntax; never substitute a mutable tag.
     temp_dir=$(mktemp -d "$stage/images/.import.XXXXXXXX")
     trap 'rm -rf -- "$temp_dir"' EXIT
-    if ! enroot import --output "$temp_dir/$image" "docker://vllm/vllm-openai@sha256:$oci_sha"; then
-        enroot import --output "$temp_dir/legacy.sqfs" "docker://registry-1.docker.io#vllm/vllm-openai:sha256:$oci_sha"
-        mv "$temp_dir/legacy.sqfs" "$temp_dir/$image"
-    fi
+    # Enroot uses @ for registry usernames. Pass the digest as the manifest reference.
+    enroot import --output "$temp_dir/$image" "docker://registry-1.docker.io#vllm/vllm-openai:sha256:$oci_sha"
     (cd "$temp_dir" && sha256sum "$image" > "$image.sha256")
     mv "$temp_dir/$image" "$image"
     mv "$temp_dir/$image.sha256" "$image.sha256"
