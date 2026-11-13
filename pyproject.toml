@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "habibench"
+version = "0.1.0"
+description = "LUCAS landscape photo curation and Tessera dataset preparation"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "Pillow>=9.1"]
+
+[project.optional-dependencies]
+staging = ["huggingface_hub>=0.32"]
+test = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+include = ["habibench*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
