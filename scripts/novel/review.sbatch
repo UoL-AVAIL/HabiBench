@@ -58,17 +58,17 @@ container_env=(env HOME=/jobcache XDG_CACHE_HOME=/jobcache/cache PYTHONPATH=/hab
 snap="/models/$revision"
 one=(srun --ntasks=1 --cpus-per-task=8 --gpus-per-task=nvidia_rtx_pro_6000:1)
 if [[ "$scope" == smoke ]]; then
-    "${one[@]}" "${pyxis[@]}" "${container_env[@]}" python scripts/novel/smoke.py "$snap"
+    "${one[@]}" "${pyxis[@]}" "${container_env[@]}" /usr/bin/python3 scripts/novel/smoke.py "$snap"
     exit
 fi
 args=(--profile novel --data-root /raw --run-dir "/runs/$run_name" --scope "$scope")
 prepare_args=("${args[@]}")
 if [[ -n "$freeze_name" ]]; then prepare_args+=(--freeze-from "/runs/$freeze_name"); fi
-"${one[@]}" "${pyxis[@]}" "${container_env[@]}" python -m habibench.lucas prepare "${prepare_args[@]}"
+"${one[@]}" "${pyxis[@]}" "${container_env[@]}" /usr/bin/python3 -m habibench.lucas prepare "${prepare_args[@]}"
 # Expand SLURM_PROCID inside the task. Each task sees its own GPU through Slurm binding.
 workers=${SLURM_NTASKS:?}
 srun --ntasks="$workers" --cpus-per-task=8 --gpus-per-task=nvidia_rtx_pro_6000:1 --gpu-bind=single:1 --kill-on-bad-exit=1 \
     "${pyxis[@]}" "${container_env[@]}" bash -c \
-    'exec python -m habibench.lucas worker --shard-index "$SLURM_PROCID" "$@"' _ \
+    'exec /usr/bin/python3 -m habibench.lucas worker --shard-index "$SLURM_PROCID" "$@"' _ \
     "${args[@]}" --model-path "$snap" --shard-count "$workers" --batch-size "${HABIBENCH_BATCH_SIZE:-8}"
-"${one[@]}" "${pyxis[@]}" "${container_env[@]}" python -m habibench.lucas finalize "${args[@]}"
+"${one[@]}" "${pyxis[@]}" "${container_env[@]}" /usr/bin/python3 -m habibench.lucas finalize "${args[@]}"
