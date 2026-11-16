@@ -104,8 +104,7 @@ def _select_local(rows: list[dict]) -> list[dict]:
     return selection
 
 
-def build_index(root: Path, profile: str) -> list[dict]:
-    """Return one record per selected point/view. Paths are relative to the raw root."""
+def _photo_rows(root: Path, profile: str) -> list[dict]:
     if profile not in {"local-small", "novel"}:
         raise ValueError(f"Unknown profile: {profile}")
     root = Path(root)
@@ -143,21 +142,54 @@ def build_index(root: Path, profile: str) -> list[dict]:
         raise ValueError(f"No LUCAS JPEGs under {root / 'lucas-dataset'}")
     if profile == "local-small":
         rows = _select_local(rows)
-    vector_status = {}
-    for row in rows:
+    return sorted(rows, key=lambda r: r["photo_id"])
+
+
+def _photo_hash(root, row):
+    if "sha256" not in row:
         with (root / row["image_path"]).open("rb") as stream:
             digest = hashlib.sha256()
             for block in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(block)
         row["sha256"] = digest.hexdigest()
+    return row["sha256"]
+
+
+def _validate_rows(root, rows):
+    vector_status = {}
+    for index, row in enumerate(rows, start=1):
+        _photo_hash(root, row)
         point_id = row["point_id"]
         if point_id not in vector_status:
             vector_status[point_id] = _vector_status(root / row["vector_path"])
         row["vector_status"] = vector_status[point_id]
-    return sorted(rows, key=lambda r: r["photo_id"])
+        if index % 5000 == 0:
+            print(f"Checked {index}/{len(rows)} photos", flush=True)
+
+def build_index(root: Path, profile: str) -> list[dict]:
+    """Return the validated index for the whole profile."""
+    root = Path(root)
+    rows = _photo_rows(root, profile)
+    _validate_rows(root, rows)
+    return rows
 
 
-def select_pilot(rows: list[dict], profile: str) -> list[dict]:
+def build_selection(root, profile, scope):
+    root = Path(root)
+    print("Reading LUCAS survey records and photo filenames...", flush=True)
+    rows = _photo_rows(root, profile)
+    print(f"Indexed {len(rows)} photo filenames. Selecting the {scope} sample.", flush=True)
+    pilot = select_pilot(rows, profile, root=root, include_audit=scope != "tune")
+    if scope != "all":
+        pilot = [item for item in pilot if scope == "pilot" or item["split"] == scope]
+        ids = {item["photo_id"] for item in pilot}
+        rows = [row for row in rows if row["photo_id"] in ids]
+    print(f"Checking image hashes and point vectors for {len(rows)} photos...", flush=True)
+    _validate_rows(root, rows)
+    return rows, pilot
+
+
+def select_pilot(rows: list[dict], profile: str, *, root=None, include_audit=True) -> list[dict]:
     """Return blinded identities for the local 8 or the point/hash-disjoint 48+48 pilot."""
     if profile not in {"local-small", "novel"}:
         raise ValueError(f"Unknown profile: {profile}")
@@ -167,7 +199,7 @@ def select_pilot(rows: list[dict], profile: str) -> list[dict]:
 
     def add(row, split):
         seen_points.add(row["point_id"])
-        seen_hashes.add(row["sha256"])
+        seen_hashes.add(_photo_hash(root, row))
         pilot.append({
             "photo_id": row["photo_id"], "split": split,
             "blind_id": _rank("blind", row).hex()[:20],
@@ -181,23 +213,25 @@ def select_pilot(rows: list[dict], profile: str) -> list[dict]:
         # Vary the viewing conditions represented in the local annotation sheet.
         choices = sorted((r for r in local if r["broad_class"] == code),
                          key=lambda r: (r["view"] != "PNCE"[index % 4], _rank("pilot", r)))
-        choice = next(r for r in choices if r["point_id"] not in seen_points and r["sha256"] not in seen_hashes)
+        choice = next(r for r in choices if r["point_id"] not in seen_points and _photo_hash(root, r) not in seen_hashes)
         tune_start[code] = choice
         add(choice, "tune")
     if profile == "novel":
-        for split in ("tune", "audit"):
+        for split in (("tune", "audit") if include_audit else ("tune",)):
             if split == "audit":
                 # Keep the entire local development gallery, including the known
                 # anomalies, their other views and identical copies, out of the audit.
                 seen_points.update(r["point_id"] for r in local)
-                seen_hashes.update(r["sha256"] for r in local)
+                seen_hashes.update(_photo_hash(root, r) for r in local)
             for code in CLASSES:
                 candidates = sorted(by_class[code], key=lambda r: _rank(split, r))
                 view_counts = Counter([tune_start[code]["view"]] if split == "tune" else [])
                 while view_counts.total() < 6:
-                    available = (r for r in candidates
-                                 if r["point_id"] not in seen_points and r["sha256"] not in seen_hashes)
-                    choice = min(available, key=lambda r: view_counts[r["view"]], default=None)
+                    # Stable ordering preserves the split rank for equally represented
+                    # views. Stop reading JPEGs as soon as a unique candidate wins.
+                    ordered = sorted(candidates, key=lambda r: view_counts[r["view"]])
+                    choice = next((r for r in ordered if r["point_id"] not in seen_points
+                                   and _photo_hash(root, r) not in seen_hashes), None)
                     if choice is None:
                         raise ValueError(f"Too few distinct points/photos for {split} class {code}")
                     add(choice, split)

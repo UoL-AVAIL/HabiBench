@@ -10,7 +10,7 @@ from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 
-from .data import build_index, select_pilot
+from .data import build_selection
 from .reviewer import decision, make_backend
 
 
@@ -70,12 +70,7 @@ def exclusive(path):
 
 
 def prepare(root, run, profile, scope):
-    rows = build_index(root, profile)
-    pilot = select_pilot(rows, profile)
-    if scope != "all":
-        pilot = [item for item in pilot if scope == "pilot" or item["split"] == scope]
-        ids = {item["photo_id"] for item in pilot}
-        rows = [row for row in rows if row["photo_id"] in ids]
+    rows, pilot = build_selection(root, profile, scope)
     if not rows:
         raise ValueError(f"No photos in {profile} scope {scope}")
     spec = {"profile": profile, "scope": scope, "index_digest": digest(rows), "task": "context-screen"}

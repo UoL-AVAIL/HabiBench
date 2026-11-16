@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from habibench.lucas.data import CLASSES, LOCAL_CASES, build_index, load_vector, select_pilot
+from habibench.lucas.data import CLASSES, LOCAL_CASES, build_index, build_selection, load_vector, select_pilot
 
 
 def make_survey(root):
@@ -67,6 +67,33 @@ class IndexTests(unittest.TestCase):
         audit = [by_id[r["photo_id"]] for r in pilot if r["split"] == "audit"]
         for field in ("point_id", "sha256"):
             self.assertTrue({r[field] for r in local}.isdisjoint(r[field] for r in audit))
+
+    def test_tuning_reads_only_candidates_and_matches_the_full_index(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            make_survey(root)
+            full = build_index(root, "novel")
+            expected = select_pilot(full, "novel")
+            jpeg_reads = []
+            original_open = Path.open
+
+            def track_open(path, *args, **kwargs):
+                if path.suffix == ".jpg":
+                    jpeg_reads.append(path)
+                return original_open(path, *args, **kwargs)
+
+            with patch.object(Path, "open", track_open), patch(
+                "habibench.lucas.data.load_vector", wraps=load_vector
+            ) as vectors:
+                rows, pilot = build_selection(root, "novel", "tune")
+            self.assertEqual(pilot, [r for r in expected if r["split"] == "tune"])
+            ids = {r["photo_id"] for r in pilot}
+            self.assertEqual(rows, [r for r in full if r["photo_id"] in ids])
+            self.assertLess(len(jpeg_reads), len(full))
+            self.assertEqual(len(jpeg_reads), len(set(jpeg_reads)))
+            self.assertEqual(vectors.call_count, 48)
+            _, audit = build_selection(root, "novel", "audit")
+            self.assertEqual(audit, [r for r in expected if r["split"] == "audit"])
 
     def test_reject_invalid_embeddings(self):
         with tempfile.TemporaryDirectory() as directory:
